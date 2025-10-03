@@ -1,11 +1,15 @@
-const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, SlashCommandBuilder, Collection } = require('discord.js');
+const { 
+  Client, GatewayIntentBits, Partials, 
+  EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, 
+  SlashCommandBuilder, Collection 
+} = require('discord.js');
 const sqlite3 = require('sqlite3').verbose();
 const express = require('express');
 
-// === KEEP-ALIVE SERVER (Replit) ===
+// === KEEP-ALIVE SERVER (Render) ===
 const app = express();
-app.get('/', (req, res) => res.send('Bot is running.'));
-app.listen(3000, () => console.log('Keep-alive server on port 3000'));
+app.get('/', (req, res) => res.send('Bot działa!'));
+app.listen(3000, () => console.log('Keep-alive server running'));
 
 // === BAZA ===
 const DB = new sqlite3.Database('./market.db');
@@ -22,7 +26,7 @@ const client = new Client({
 
 client.commands = new Collection();
 
-// === REJESTRACJA KOMEND ===
+// === KOMENDY ===
 const commands = [
   new SlashCommandBuilder()
     .setName('wystaw')
@@ -49,7 +53,7 @@ const commands = [
     .setDescription('Sprawdź swoje saldo punktów'),
 ].map(cmd => cmd.toJSON());
 
-// === POMOCNICZE FUNKCJE ===
+// === FUNKCJE POMOCNICZE ===
 function ensureUser(userId, callback) {
   DB.run("INSERT INTO users (id, points) VALUES (?, ?) ON CONFLICT(id) DO NOTHING", [userId, 0], callback);
 }
@@ -82,13 +86,23 @@ function getPoints(userId, callback) {
   });
 }
 
-// === ZDARZENIA ===
+// === EVENT READY ===
 client.once('ready', async () => {
   console.log(`Zalogowano jako ${client.user.tag}`);
-  await client.application.commands.set(commands);
+
+  // 👇 WSTAW ID SWOJEGO SERWERA
+  const GUILD_ID = "TWOJE_ID_SERWERA";
+  const guild = client.guilds.cache.get(GUILD_ID);
+
+  if (guild) {
+    await guild.commands.set(commands);
+    console.log("Komendy slash zarejestrowane lokalnie w guild (natychmiast).");
+  } else {
+    console.log("Nie znaleziono gildii – sprawdź ID serwera.");
+  }
 });
 
-// === LOGIKA INTERAKCJI ===
+// === OBSŁUGA KOMEND I PRZYCISKÓW ===
 client.on('interactionCreate', async (interaction) => {
   if (interaction.isChatInputCommand()) {
     const name = interaction.commandName;
@@ -158,7 +172,6 @@ client.on('interactionCreate', async (interaction) => {
       removePoints(interaction.user.id, listing.price, (success) => {
         if (!success) return interaction.reply({ content: "Nie masz wystarczającej liczby punktów!", ephemeral: true });
 
-        // Transfer + oznaczenie jako sprzedany
         addPoints(listing.seller, listing.price, () => {
           DB.run("UPDATE listings SET sold = 1 WHERE id = ?", [listingId], () => {
             interaction.reply({ content: `Kupiłeś **${listing.name}**! Oto link: ${listing.link}`, ephemeral: true });
