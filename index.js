@@ -186,7 +186,9 @@ client.on('interactionCreate', async (interaction) => {
     const user = interaction.options.getUser('uzytkownik');
     const ilosc = interaction.options.getInteger('ilosc');
     addPoints(user.id, ilosc, () => {
-      interaction.reply(`Dodano ${ilosc} punktów dla ${user.username}`);
+      getPoints(user.id, (pts) => {
+        interaction.reply(`Dodano ${ilosc} punktów dla ${user.username}. Nowe saldo: ${pts} pkt`);
+      });
     });
   }
 
@@ -195,8 +197,13 @@ client.on('interactionCreate', async (interaction) => {
     const user = interaction.options.getUser('uzytkownik');
     const ilosc = interaction.options.getInteger('ilosc');
     removePoints(user.id, ilosc, (success) => {
-      if (success) interaction.reply(`Usunięto ${ilosc} punktów od ${user.username}`);
-      else interaction.reply(`${user.username} nie ma wystarczającej liczby punktów`);
+      if (success) {
+        getPoints(user.id, (pts) => {
+          interaction.reply(`Usunięto ${ilosc} punktów od ${user.username}. Nowe saldo: ${pts} pkt`);
+        });
+      } else {
+        interaction.reply(`${user.username} nie ma wystarczającej liczby punktów`);
+      }
     });
   }
 
@@ -207,7 +214,7 @@ client.on('interactionCreate', async (interaction) => {
     });
   }
 
-  // --- Kupowanie oferty ---
+    // --- Kupowanie oferty ---
   if (interaction.isButton() && interaction.customId.startsWith('buy_')) {
     const listingId = interaction.customId.split('_')[1];
 
@@ -231,7 +238,8 @@ client.on('interactionCreate', async (interaction) => {
             // Pobierz saldo kupującego i sprzedawcy
             getPoints(interaction.user.id, (buyerPts) => {
               getPoints(listing.seller, (sellerPts) => {
-                const embed = new EmbedBuilder()
+                // === Embed potwierdzający zakup ===
+                const confirmEmbed = new EmbedBuilder()
                   .setColor(0x57F287)
                   .setTitle("✅ Zakup udany!")
                   .setDescription(`Kupiłeś **${listing.name}** od <@${listing.seller}>`)
@@ -244,7 +252,18 @@ client.on('interactionCreate', async (interaction) => {
                   .setFooter({ text: `ID oferty: ${listingId}` })
                   .setTimestamp();
 
-                interaction.reply({ embeds: [embed], ephemeral: true });
+                interaction.reply({ embeds: [confirmEmbed], ephemeral: true });
+
+                // === Aktualizacja oryginalnego embeda oferty ===
+                if (interaction.message && interaction.message.embeds.length > 0) {
+                  const original = EmbedBuilder.from(interaction.message.embeds[0]);
+                  const updated = original.spliceFields(2, 1, {
+                    name: "📊 Saldo sprzedawcy",
+                    value: `${sellerPts} pkt`,
+                    inline: true
+                  });
+                  interaction.message.edit({ embeds: [updated], components: interaction.message.components });
+                }
               });
             });
           });
@@ -256,3 +275,5 @@ client.on('interactionCreate', async (interaction) => {
 
 // === START ===
 client.login(process.env.DISCORD_TOKEN);
+
+  
