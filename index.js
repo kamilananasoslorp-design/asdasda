@@ -1,7 +1,8 @@
-const { 
-  Client, GatewayIntentBits, Partials, 
-  EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, 
-  SlashCommandBuilder, Collection 
+const {
+  Client, GatewayIntentBits, Partials,
+  EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
+  SlashCommandBuilder, Collection,
+  ModalBuilder, TextInputBuilder, TextInputStyle
 } = require('discord.js');
 const sqlite3 = require('sqlite3').verbose();
 const express = require('express');
@@ -30,11 +31,7 @@ client.commands = new Collection();
 const commands = [
   new SlashCommandBuilder()
     .setName('wystaw')
-    .setDescription('Wystaw produkt na sprzedaż')
-    .addIntegerOption(opt => opt.setName('cena').setDescription('Cena w punktach').setRequired(true))
-    .addStringOption(opt => opt.setName('nazwa').setDescription('Nazwa produktu').setRequired(true))
-    .addStringOption(opt => opt.setName('opis').setDescription('Opis produktu').setRequired(true))
-    .addStringOption(opt => opt.setName('link').setDescription('Link do produktu').setRequired(true)),
+    .setDescription('Wystaw produkt na sprzedaż'),
 
   new SlashCommandBuilder()
     .setName('dodajpunkty')
@@ -104,26 +101,72 @@ client.once('ready', async () => {
 
 // === OBSŁUGA KOMEND I PRZYCISKÓW ===
 client.on('interactionCreate', async (interaction) => {
-  if (interaction.isChatInputCommand()) {
-    const name = interaction.commandName;
+  // --- /wystaw otwiera modal ---
+  if (interaction.isChatInputCommand() && interaction.commandName === 'wystaw') {
+    const modal = new ModalBuilder()
+      .setCustomId('wystawModal')
+      .setTitle('🛒 Wystaw produkt');
 
-    if (name === 'wystaw') {
-      const cena = interaction.options.getInteger('cena');
-      const nazwa = interaction.options.getString('nazwa');
-      const opis = interaction.options.getString('opis');
-      const link = interaction.options.getString('link');
+    const cena = new TextInputBuilder()
+      .setCustomId('cena')
+      .setLabel('Cena w punktach')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
 
-      DB.run(
-        "INSERT INTO listings (seller, price, name, description, link) VALUES (?, ?, ?, ?, ?)",
-        [interaction.user.id, cena, nazwa, opis, link],
-        function () {
-          const listingId = this.lastID;
+    const nazwa = new TextInputBuilder()
+      .setCustomId('nazwa')
+      .setLabel('Nazwa produktu')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
 
+    const opis = new TextInputBuilder()
+      .setCustomId('opis')
+      .setLabel('Opis produktu')
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(true);
+
+    const link = new TextInputBuilder()
+      .setCustomId('link')
+      .setLabel('Link do produktu')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(cena),
+      new ActionRowBuilder().addComponents(nazwa),
+      new ActionRowBuilder().addComponents(opis),
+      new ActionRowBuilder().addComponents(link)
+    );
+
+    await interaction.showModal(modal);
+  }
+
+  // --- Obsługa modala ---
+  if (interaction.isModalSubmit() && interaction.customId === 'wystawModal') {
+    const cena = parseInt(interaction.fields.getTextInputValue('cena'));
+    const nazwa = interaction.fields.getTextInputValue('nazwa');
+    const opis = interaction.fields.getTextInputValue('opis');
+    const link = interaction.fields.getTextInputValue('link');
+
+    DB.run(
+      "INSERT INTO listings (seller, price, name, description, link) VALUES (?, ?, ?, ?, ?)",
+      [interaction.user.id, cena, nazwa, opis, link],
+      function () {
+        const listingId = this.lastID;
+
+        getPoints(interaction.user.id, (pts) => {
           const embed = new EmbedBuilder()
+            .setColor(0x5865F2)
             .setAuthor({ name: interaction.user.username, iconURL: interaction.user.displayAvatarURL() })
-            .setTitle(nazwa)
+            .setTitle(`🛒 ${nazwa}`)
             .setDescription(opis)
-            .setColor(0x3B82F6);
+            .addFields(
+              { name: "💰 Cena", value: `${cena} pkt`, inline: true },
+              { name: "👤 Sprzedawca", value: `<@${interaction.user.id}>`, inline: true },
+              { name: "📊 Saldo sprzedawcy", value: `${pts} pkt`, inline: true }
+            )
+            .setFooter({ text: `ID oferty: ${listingId}` })
+            .setTimestamp();
 
           const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
@@ -133,48 +176,77 @@ client.on('interactionCreate', async (interaction) => {
           );
 
           interaction.reply({ embeds: [embed], components: [row] });
-        }
-      );
-    }
-
-    if (name === 'dodajpunkty') {
-      const user = interaction.options.getUser('uzytkownik');
-      const ilosc = interaction.options.getInteger('ilosc');
-      addPoints(user.id, ilosc, () => {
-        interaction.reply(`Dodano ${ilosc} punktów dla ${user.username}`);
-      });
-    }
-
-    if (name === 'usunpunkty') {
-      const user = interaction.options.getUser('uzytkownik');
-      const ilosc = interaction.options.getInteger('ilosc');
-      removePoints(user.id, ilosc, (success) => {
-        if (success) interaction.reply(`Usunięto ${ilosc} punktów od ${user.username}`);
-        else interaction.reply(`${user.username} nie ma wystarczającej liczby punktów`);
-      });
-    }
-
-    if (name === 'saldo') {
-      getPoints(interaction.user.id, (pts) => {
-        interaction.reply(`Twoje saldo: ${pts} pkt`);
-      });
-    }
+        });
+      }
+    );
   }
 
+  // --- /dodajpunkty ---
+  if (interaction.isChatInputCommand() && interaction.commandName === 'dodajpunkty') {
+    const user = interaction.options.getUser('uzytkownik');
+    const ilosc = interaction.options.getInteger('ilosc');
+    addPoints(user.id, ilosc, () => {
+      interaction.reply(`Dodano ${ilosc} punktów dla ${user.username}`);
+    });
+  }
+
+  // --- /usunpunkty ---
+  if (interaction.isChatInputCommand() && interaction.commandName === 'usunpunkty') {
+    const user = interaction.options.getUser('uzytkownik');
+    const ilosc = interaction.options.getInteger('ilosc');
+    removePoints(user.id, ilosc, (success) => {
+      if (success) interaction.reply(`Usunięto ${ilosc} punktów od ${user.username}`);
+      else interaction.reply(`${user.username} nie ma wystarczającej liczby punktów`);
+    });
+  }
+
+  // --- /saldo ---
+  if (interaction.isChatInputCommand() && interaction.commandName === 'saldo') {
+    getPoints(interaction.user.id, (pts) => {
+      interaction.reply(`Twoje saldo: ${pts} pkt`);
+    });
+  }
+
+  // --- Kupowanie oferty ---
   if (interaction.isButton() && interaction.customId.startsWith('buy_')) {
     const listingId = interaction.customId.split('_')[1];
 
     DB.get("SELECT * FROM listings WHERE id = ?", [listingId], (err, listing) => {
-      if (!listing) return interaction.reply({ content: "Ten produkt już nie istnieje.", ephemeral: true });
-      if (listing.sold === 1) return interaction.reply({ content: "Produkt został już kupiony.", ephemeral: true });
-      if (listing.seller === interaction.user.id) return interaction.reply({ content: "Nie możesz kupić własnej oferty.", ephemeral: true });
+      if (!listing) {
+        return interaction.reply({ content: "❌ Ten produkt już nie istnieje.", ephemeral: true });
+      }
+      if (listing.sold === 1) {
+        return interaction.reply({ content: "❌ Produkt został już kupiony.", ephemeral: true });
+      }
 
+      // UWAGA: pozwalamy kupować własne oferty (dla testów)
       removePoints(interaction.user.id, listing.price, (success) => {
-        if (!success) return interaction.reply({ content: "Nie masz wystarczającej liczby punktów!", ephemeral: true });
+        if (!success) {
+          return interaction.reply({ content: "💸 Nie masz wystarczającej liczby punktów!", ephemeral: true });
+        }
 
+        // Dodaj punkty sprzedawcy
         addPoints(listing.seller, listing.price, () => {
           DB.run("UPDATE listings SET sold = 1 WHERE id = ?", [listingId], () => {
-            interaction.reply({ content: `Kupiłeś **${listing.name}**! Oto link: ${listing.link}`, ephemeral: true });
+            // Pobierz saldo kupującego i sprzedawcy
+            getPoints(interaction.user.id, (buyerPts) => {
+              getPoints(listing.seller, (sellerPts) => {
+                const embed = new EmbedBuilder()
+                  .setColor(0x57F287)
+                  .setTitle("✅ Zakup udany!")
+                  .setDescription(`Kupiłeś **${listing.name}** od <@${listing.seller}>`)
+                  .addFields(
+                    { name: "🔗 Link do produktu", value: listing.link },
+                    { name: "💰 Cena", value: `${listing.price} pkt`, inline: true },
+                    { name: "👤 Twoje saldo", value: `${buyerPts} pkt`, inline: true },
+                    { name: "👤 Saldo sprzedawcy", value: `${sellerPts} pkt`, inline: true }
+                  )
+                  .setFooter({ text: `ID oferty: ${listingId}` })
+                  .setTimestamp();
+
+                interaction.reply({ embeds: [embed], ephemeral: true });
+              });
+            });
           });
         });
       });
