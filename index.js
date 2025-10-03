@@ -6,7 +6,6 @@ const {
 } = require('discord.js');
 const sqlite3 = require('sqlite3').verbose();
 const express = require('express');
-const cron = require('node-cron');
 
 // === KEEP-ALIVE SERVER (Render) ===
 const app = express();
@@ -209,7 +208,10 @@ function hasAdminPermission(member) {
 async function sendLog(type, user, targetUser = null, points = 0, listing = null, details = '') {
   try {
     const logChannel = await client.channels.fetch(LOG_CHANNEL_ID);
-    if (!logChannel) return;
+    if (!logChannel) {
+      console.log('❌ Nie znaleziono kanału do logów');
+      return;
+    }
 
     const embed = new EmbedBuilder()
       .setTimestamp()
@@ -291,15 +293,23 @@ async function sendLog(type, user, targetUser = null, points = 0, listing = null
   }
 }
 
-// Funkcja codziennych nagród
+// Funkcja codziennych nagród - prostsza wersja bez node-cron
 function setupDailyRewards() {
-  // Codzienne resetowanie nagród o północy
-  cron.schedule('0 0 * * *', () => {
-    DB.run("UPDATE users SET last_daily = NULL");
-    console.log('🔄 Zresetowano codzienne nagrody');
-  });
+  // Sprawdzaj codziennie o północy (co 24 godziny)
+  setInterval(() => {
+    const now = new Date();
+    if (now.getHours() === 0 && now.getMinutes() === 0) {
+      DB.run("UPDATE users SET last_daily = NULL", (err) => {
+        if (err) {
+          console.error('❌ Błąd resetowania codziennych nagród:', err);
+        } else {
+          console.log('🔄 Zresetowano codzienne nagrody');
+        }
+      });
+    }
+  }, 60000); // Sprawdzaj co minutę
 
-  console.log('✅ Zaplanowano codzienne nagrody');
+  console.log('✅ Uruchomiono system codziennych nagród');
 }
 
 // === EVENT READY ===
@@ -815,15 +825,6 @@ client.on('interactionCreate', async (interaction) => {
     
     console.log(`🔍 Próba zakupu oferty ID: ${listingId} przez użytkownika: ${interaction.user.username}`);
 
-    // DEBUG: Sprawdź wszystkie oferty w bazie
-    DB.all("SELECT * FROM listings", (err, allListings) => {
-      if (err) {
-        console.error('Błąd przy pobieraniu wszystkich ofert:', err);
-      } else {
-        console.log('📋 Wszystkie oferty w bazie:', allListings);
-      }
-    });
-
     DB.get("SELECT * FROM listings WHERE id = ?", [listingId], (err, listing) => {
       if (err) {
         console.error('❌ Błąd bazy danych przy pobieraniu oferty:', err);
@@ -911,7 +912,7 @@ client.on('interactionCreate', async (interaction) => {
                     .addFields(
                       { name: "👤 Sprzedawca", value: `<@${listing.seller}>`, inline: true },
                       { name: "💰 Cena", value: `**${listing.price}** pkt`, inline: true },
-                      { name: "🔗 Link do produktu", value: `||${listing.link}||`, inline: false },
+                      { name: "🔗 Link do produktu", value: listing.link, inline: false },
                       { name: "💰 Twoje saldo", value: `**${buyerPts}** pkt`, inline: true }
                     )
                     .setFooter({ text: `ID oferty: ${listingId}` })
@@ -926,7 +927,7 @@ client.on('interactionCreate', async (interaction) => {
                       .setColor(0x95A5A6)
                       .setTitle(`✅ SPRZEDANE: ${listing.name}`)
                       .setDescription(originalEmbed.description || '')
-                      .spliceFields(0, originalEmbed.fields.length) // Usuń wszystkie pola
+                      .spliceFields(0, originalEmbed.fields.length)
                       .addFields(
                         { name: "💰 Cena", value: `**${listing.price}** pkt`, inline: true },
                         { name: "👤 Sprzedawca", value: `<@${listing.seller}>`, inline: true },
