@@ -2,11 +2,10 @@ const {
   Client, GatewayIntentBits, Partials,
   EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
   SlashCommandBuilder, Collection,
-  ModalBuilder, TextInputBuilder, TextInputStyle
+  ModalBuilder, TextInputBuilder, TextInputStyle, PermissionsBitField
 } = require('discord.js');
 const sqlite3 = require('sqlite3').verbose();
 const express = require('express');
-const path = require('path');
 
 // === KEEP-ALIVE SERVER (Render) ===
 const app = express();
@@ -56,6 +55,9 @@ const client = new Client({
 
 client.commands = new Collection();
 
+// ID roli administratora (tylko ta rola i administratorzy mogą używać /dodajpunkty)
+const ADMIN_ROLE_ID = "1369060137892843530";
+
 // === KOMENDY ===
 const commands = [
   new SlashCommandBuilder()
@@ -64,7 +66,7 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('dodajpunkty')
-    .setDescription('➕ Dodaj punkty użytkownikowi')
+    .setDescription('➕ Dodaj punkty użytkownikowi (Tylko administratorzy)')
     .addUserOption(opt => 
       opt.setName('uzytkownik')
         .setDescription('Użytkownik')
@@ -162,6 +164,12 @@ function transferPoints(fromUserId, toUserId, amount, callback) {
   });
 }
 
+// Funkcja sprawdzająca uprawnienia administratora
+function hasAdminPermission(member) {
+  return member.permissions.has(PermissionsBitField.Flags.Administrator) || 
+         member.roles.cache.has(ADMIN_ROLE_ID);
+}
+
 // === EVENT READY ===
 client.once('ready', async () => {
   console.log(`✅ Zalogowano jako ${client.user.tag}`);
@@ -185,7 +193,7 @@ client.on('interactionCreate', async (interaction) => {
       .setTitle('🛒 Wystaw produkt na sprzedaż')
       .setDescription('Kliknij przycisk poniżej, aby wypełnić formularz wystawienia produktu.')
       .addFields(
-        { name: '📝 Co będzie potrzebne?', value: '• Nazwa produktu\n• Opis\n• Cena w punktach\n• Link do produktu' }
+        { name: '📝 Co będzie potrzebne?', value: '• Nazwa produktu\n• Opis\n• Cena w punktach\n• Link do produktu (będzie widoczny dopiero po zakupie)' }
       )
       .setFooter({ text: 'Formularz otworzy się w nowym oknie' });
 
@@ -231,7 +239,7 @@ client.on('interactionCreate', async (interaction) => {
 
     const link = new TextInputBuilder()
       .setCustomId('link')
-      .setLabel('Link do produktu')
+      .setLabel('Link do produktu (prywatny)')
       .setPlaceholder('https://example.com/produkt')
       .setStyle(TextInputStyle.Short)
       .setRequired(true)
@@ -298,7 +306,8 @@ client.on('interactionCreate', async (interaction) => {
             .addFields(
               { name: "💰 Cena", value: `**${cena}** pkt`, inline: true },
               { name: "👤 Sprzedawca", value: `<@${interaction.user.id}>`, inline: true },
-              { name: "📊 Saldo sprzedawcy", value: `**${pts}** pkt`, inline: true }
+              { name: "📊 Saldo sprzedawcy", value: `**${pts}** pkt`, inline: true },
+              { name: "🔐 Dostęp do produktu", value: "Link będzie dostępny po zakupie", inline: false }
             )
             .setFooter({ text: `ID oferty: ${listingId} • ${new Date().toLocaleDateString('pl-PL')}` })
             .setTimestamp();
@@ -317,7 +326,7 @@ client.on('interactionCreate', async (interaction) => {
           interaction.channel.send({ embeds: [embed], components: [row] });
           
           interaction.editReply({
-            content: `✅ **Sukces!** Produkt "${nazwa}" został wystawiony na sprzedaż za **${cena}** punktów!`,
+            content: `✅ **Sukces!** Produkt "${nazwa}" został wystawiony na sprzedaż za **${cena}** punktów!\n\n**⚠️ Uwaga:** Link do produktu jest prywatny i będzie widoczny tylko dla kupującego.`,
             ephemeral: true
           });
         });
@@ -325,8 +334,19 @@ client.on('interactionCreate', async (interaction) => {
     );
   }
 
-  // --- /dodajpunkty ---
+  // --- /dodajpunkty (TYLKO ADMINISTRATORZY) ---
   if (interaction.isChatInputCommand() && interaction.commandName === 'dodajpunkty') {
+    // Sprawdź uprawnienia
+    if (!hasAdminPermission(interaction.member)) {
+      const embed = new EmbedBuilder()
+        .setColor(0xED4245)
+        .setTitle('❌ Brak uprawnień')
+        .setDescription('Ta komenda jest dostępna tylko dla administratorów!')
+        .setTimestamp();
+      
+      return interaction.reply({ embeds: [embed], ephemeral: true });
+    }
+
     await interaction.deferReply();
     
     const user = interaction.options.getUser('uzytkownik');
@@ -340,7 +360,8 @@ client.on('interactionCreate', async (interaction) => {
           .setDescription(`Dodano **${ilosc}** punktów do konta **${user.username}**`)
           .addFields(
             { name: '👤 Użytkownik', value: `<@${user.id}>`, inline: true },
-            { name: '💰 Nowe saldo', value: `**${pts}** pkt`, inline: true }
+            { name: '💰 Nowe saldo', value: `**${pts}** pkt`, inline: true },
+            { name: '👨‍💼 Administrator', value: `<@${interaction.user.id}>`, inline: true }
           )
           .setTimestamp();
 
@@ -423,14 +444,14 @@ client.on('interactionCreate', async (interaction) => {
         const embed = new EmbedBuilder()
           .setColor(0x5865F2)
           .setTitle('🏪 Dostępne produkty')
-          .setDescription(`Znaleziono **${rows.length}** dostępnych produktów:`)
+          .setDescription(`Znaleziono **${rows.length}** dostępnych produktów:\n\n*🔐 Linki do produktów są prywatne i dostępne tylko po zakupie*`)
           .setFooter({ text: `Użyj /wystaw aby dodać swój produkt` })
           .setTimestamp();
 
         rows.forEach((item, index) => {
           embed.addFields({
             name: `🛒 ${item.name} - ${item.price} pkt`,
-            value: `**Opis:** ${item.description.substring(0, 100)}...\n**Sprzedawca:** <@${item.seller}> | **ID:** ${item.id}`,
+            value: `**Opis:** ${item.description.substring(0, 100)}${item.description.length > 100 ? '...' : ''}\n**Sprzedawca:** <@${item.seller}> | **ID:** ${item.id}`,
             inline: false
           });
         });
@@ -570,7 +591,7 @@ client.on('interactionCreate', async (interaction) => {
               // Pobierz aktualne salda
               getPoints(interaction.user.id, (buyerPts) => {
                 getPoints(listing.seller, (sellerPts) => {
-                  // Embed potwierdzający zakup
+                  // Embed potwierdzający zakup DLA KUPUJĄCEGO (Z LINKIEM)
                   const confirmEmbed = new EmbedBuilder()
                     .setColor(0x57F287)
                     .setTitle("✅ Zakup udany!")
@@ -578,7 +599,7 @@ client.on('interactionCreate', async (interaction) => {
                     .addFields(
                       { name: "👤 Sprzedawca", value: `<@${listing.seller}>`, inline: true },
                       { name: "💰 Cena", value: `**${listing.price}** pkt`, inline: true },
-                      { name: "🔗 Link", value: listing.link, inline: false },
+                      { name: "🔗 Link do produktu", value: listing.link, inline: false },
                       { name: "💰 Twoje saldo", value: `**${buyerPts}** pkt`, inline: true }
                     )
                     .setFooter({ text: `ID oferty: ${listingId}` })
@@ -586,13 +607,14 @@ client.on('interactionCreate', async (interaction) => {
 
                   interaction.editReply({ embeds: [confirmEmbed] });
 
-                  // Aktualizacja oryginalnej wiadomości z ofertą
+                  // Aktualizacja oryginalnej wiadomości z ofertą (BEZ LINKU)
                   const updatedEmbed = EmbedBuilder.from(interaction.message.embeds[0])
                     .setColor(0x95A5A6)
                     .setTitle(`✅ SPRZEDANE: ${listing.name}`)
                     .addFields(
                       { name: "👤 Kupujący", value: `<@${interaction.user.id}>`, inline: true },
-                      { name: "💰 Cena", value: `**${listing.price}** pkt`, inline: true }
+                      { name: "💰 Cena", value: `**${listing.price}** pkt`, inline: true },
+                      { name: "🔐 Produkt", value: "Link został wysłany do kupującego", inline: false }
                     );
 
                   const disabledRow = new ActionRowBuilder().addComponents(
@@ -613,7 +635,7 @@ client.on('interactionCreate', async (interaction) => {
                     components: [disabledRow] 
                   });
 
-                  // Powiadomienie dla sprzedawcy
+                  // Powiadomienie dla sprzedawcy (BEZ LINKU)
                   client.users.fetch(listing.seller).then(sellerUser => {
                     const sellerEmbed = new EmbedBuilder()
                       .setColor(0x57F287)
@@ -639,7 +661,7 @@ client.on('interactionCreate', async (interaction) => {
     });
   }
 
-  // --- Przycisk informacji o ofercie ---
+  // --- Przycisk informacji o ofercie (BEZ LINKU) ---
   if (interaction.isButton() && interaction.customId.startsWith('info_')) {
     await interaction.deferReply({ ephemeral: true });
     
@@ -662,7 +684,7 @@ client.on('interactionCreate', async (interaction) => {
           { name: '👤 Sprzedawca', value: `<@${listing.seller}>`, inline: true },
           { name: '📅 Wystawiono', value: `<t:${Math.floor(new Date(listing.created_at).getTime() / 1000)}:R>`, inline: true },
           { name: '📝 Opis', value: listing.description || 'Brak opisu', inline: false },
-          { name: '🔗 Link', value: listing.link || 'Brak linku', inline: false }
+          { name: '🔐 Dostęp do produktu', value: 'Link będzie dostępny po zakupie', inline: false }
         )
         .setFooter({ text: listing.sold ? '✅ Sprzedane' : '🛒 Dostępne' })
         .setTimestamp();
