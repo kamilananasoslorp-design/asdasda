@@ -1,14 +1,14 @@
 {
   "name": "discord-market-bot",
-  "version": "2.0.0",
-  "description": "Zaawansowany bot marketplace dla Discord",
+  "version": "3.0.0",
+  "description": "Zaawansowany bot marketplace dla Discord z logami i codziennymi nagrodami",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
     "start": "node index.js",
     "dev": "node --watch index.js"
   },
-  "keywords": ["discord", "marketplace", "bot", "points"],
+  "keywords": ["discord", "marketplace", "bot", "points", "logs", "daily"],
   "author": "Twój Nick",
   "license": "MIT",
   "dependencies": {
