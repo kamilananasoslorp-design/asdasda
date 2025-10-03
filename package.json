@@ -1,14 +1,22 @@
 {
   "name": "discord-market-bot",
-  "version": "1.0.0",
+  "version": "2.0.0",
+  "description": "Zaawansowany bot marketplace dla Discord",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "node --watch index.js"
   },
+  "keywords": ["discord", "marketplace", "bot", "points"],
+  "author": "Twój Nick",
+  "license": "MIT",
   "dependencies": {
     "discord.js": "^14.15.3",
     "sqlite3": "^5.1.7",
     "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
