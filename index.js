@@ -17,6 +17,15 @@ const LOG_CHANNEL_ID = "1371824300360990740"; // Kanał do logów
 const ADMIN_ROLE_ID = "1369060137892843530"; // Rola administratora
 const DAILY_POINTS = 4; // Punkty codzienne
 
+// === KOLORYSTYKA ===
+const COLORS = {
+  PRIMARY: 0x1e3a8a,     // Ciemny niebieski
+  SUCCESS: 0x059669,     // Ciemny zielony
+  WARNING: 0xd97706,     // Ciemny pomarańczowy
+  ERROR: 0xdc2626,       // Ciemny czerwony
+  PREMIUM: 0x7c3aed      // Ciemny fioletowy
+};
+
 // === BAZA DANYCH ===
 const DB = new sqlite3.Database('./market.db', (err) => {
   if (err) {
@@ -66,9 +75,10 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.DirectMessages
   ],
-  partials: [Partials.Channel]
+  partials: [Partials.Channel, Partials.Message]
 });
 
 client.commands = new Collection();
@@ -137,6 +147,14 @@ const commands = [
   new SlashCommandBuilder()
     .setName('ranking')
     .setDescription('🏆 Top 10 użytkowników z najwięcej punktami'),
+
+  new SlashCommandBuilder()
+    .setName('usunogloszenie')
+    .setDescription('🗑️ Usuń ogłoszenie (Administracja)')
+    .addIntegerOption(opt => 
+      opt.setName('id')
+        .setDescription('ID ogłoszenia do usunięcia')
+        .setRequired(true)),
 ].map(cmd => cmd.toJSON());
 
 // === FUNKCJE POMOCNICZE ===
@@ -219,7 +237,7 @@ async function sendLog(type, user, targetUser = null, points = 0, listing = null
 
     switch (type) {
       case 'listing_created':
-        embed.setColor(0x5865F2)
+        embed.setColor(COLORS.PRIMARY)
           .setTitle('🛒 Nowa oferta')
           .setDescription(`**${user.username}** wystawił produkt na sprzedaż`)
           .addFields(
@@ -231,7 +249,7 @@ async function sendLog(type, user, targetUser = null, points = 0, listing = null
         break;
 
       case 'purchase':
-        embed.setColor(0x57F287)
+        embed.setColor(COLORS.SUCCESS)
           .setTitle('✅ Zakup produktu')
           .setDescription(`**${user.username}** kupił produkt od **${targetUser.username}**`)
           .addFields(
@@ -244,7 +262,7 @@ async function sendLog(type, user, targetUser = null, points = 0, listing = null
         break;
 
       case 'points_added':
-        embed.setColor(0x57F287)
+        embed.setColor(COLORS.SUCCESS)
           .setTitle('➕ Punkty dodane')
           .setDescription(`**${user.username}** dodał punkty użytkownikowi **${targetUser.username}**`)
           .addFields(
@@ -255,7 +273,7 @@ async function sendLog(type, user, targetUser = null, points = 0, listing = null
         break;
 
       case 'points_removed':
-        embed.setColor(0xFEE75C)
+        embed.setColor(COLORS.WARNING)
           .setTitle('➖ Punkty usunięte')
           .setDescription(`**${user.username}** usunął punkty użytkownikowi **${targetUser.username}**`)
           .addFields(
@@ -266,7 +284,7 @@ async function sendLog(type, user, targetUser = null, points = 0, listing = null
         break;
 
       case 'daily_reward':
-        embed.setColor(0xEB459E)
+        embed.setColor(COLORS.PREMIUM)
           .setTitle('🎁 Codzienna nagroda')
           .setDescription(`**${user.username}** odebrał codzienne punkty`)
           .addFields(
@@ -276,13 +294,34 @@ async function sendLog(type, user, targetUser = null, points = 0, listing = null
         break;
 
       case 'transfer':
-        embed.setColor(0x5865F2)
+        embed.setColor(COLORS.PRIMARY)
           .setTitle('💸 Przelew punktów')
           .setDescription(`**${user.username}** przelał punkty do **${targetUser.username}**`)
           .addFields(
             { name: '👤 Od', value: `<@${user.id}>`, inline: true },
             { name: '👤 Do', value: `<@${targetUser.id}>`, inline: true },
             { name: '💰 Ilość', value: `${points} pkt`, inline: true }
+          );
+        break;
+
+      case 'listing_edited':
+        embed.setColor(COLORS.WARNING)
+          .setTitle('✏️ Oferta edytowana')
+          .setDescription(`**${user.username}** edytował ofertę`)
+          .addFields(
+            { name: '📦 Produkt', value: listing.name, inline: true },
+            { name: '💰 Cena', value: `${listing.price} pkt`, inline: true },
+            { name: '🆔 ID oferty', value: `${listing.id}`, inline: true }
+          );
+        break;
+
+      case 'listing_deleted':
+        embed.setColor(COLORS.ERROR)
+          .setTitle('🗑️ Oferta usunięta')
+          .setDescription(`**${user.username}** usunął ofertę`)
+          .addFields(
+            { name: '📦 Produkt', value: details, inline: true },
+            { name: '🆔 ID oferty', value: `${listingId}`, inline: true }
           );
         break;
     }
@@ -293,9 +332,33 @@ async function sendLog(type, user, targetUser = null, points = 0, listing = null
   }
 }
 
-// Funkcja codziennych nagród - prostsza wersja bez node-cron
+// Funkcja wysyłająca wiadomość prywatną po zakupie
+async function sendPurchaseDM(buyer, listing, seller) {
+  try {
+    const dmEmbed = new EmbedBuilder()
+      .setColor(COLORS.SUCCESS)
+      .setTitle('✅ Zakup zakończony pomyślnie!')
+      .setDescription(`Dziękujemy za zakup **${listing.name}**`)
+      .addFields(
+        { name: '📦 Produkt', value: listing.name, inline: true },
+        { name: '💰 Cena', value: `${listing.price} pkt`, inline: true },
+        { name: '👤 Sprzedawca', value: `<@${seller.id}>`, inline: true },
+        { name: '🔗 Link do produktu', value: listing.link, inline: false },
+        { name: '🆔 ID transakcji', value: `#${listing.id}`, inline: true }
+      )
+      .setFooter({ text: 'W razie problemów skontaktuj się ze sprzedawcą' })
+      .setTimestamp();
+
+    await buyer.send({ embeds: [dmEmbed] });
+    return true;
+  } catch (error) {
+    console.error('Nie udało się wysłać wiadomości prywatnej:', error);
+    return false;
+  }
+}
+
+// Funkcja codziennych nagród
 function setupDailyRewards() {
-  // Sprawdzaj codziennie o północy (co 24 godziny)
   setInterval(() => {
     const now = new Date();
     if (now.getHours() === 0 && now.getMinutes() === 0) {
@@ -307,7 +370,7 @@ function setupDailyRewards() {
         }
       });
     }
-  }, 60000); // Sprawdzaj co minutę
+  }, 60000);
 
   console.log('✅ Uruchomiono system codziennych nagród');
 }
@@ -334,7 +397,7 @@ client.on('interactionCreate', async (interaction) => {
   // --- /wystaw - pokazuje tylko przycisk do otwarcia formularza ---
   if (interaction.isChatInputCommand() && interaction.commandName === 'wystaw') {
     const embed = new EmbedBuilder()
-      .setColor(0x5865F2)
+      .setColor(COLORS.PRIMARY)
       .setTitle('🛒 Wystaw produkt na sprzedaż')
       .setDescription('Kliknij przycisk poniżej, aby wypełnić formularz wystawienia produktu.')
       .addFields(
@@ -448,7 +511,7 @@ client.on('interactionCreate', async (interaction) => {
 
         getPoints(interaction.user.id, (pts) => {
           const embed = new EmbedBuilder()
-            .setColor(0x5865F2)
+            .setColor(COLORS.PRIMARY)
             .setAuthor({ 
               name: interaction.user.username, 
               iconURL: interaction.user.displayAvatarURL() 
@@ -475,7 +538,22 @@ client.on('interactionCreate', async (interaction) => {
               .setStyle(ButtonStyle.Secondary)
           );
 
-          interaction.channel.send({ embeds: [embed], components: [row] });
+          // Dodaj przyciski edycji i usuwania dla sprzedawcy
+          const ownerRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`edit_${listingId}`)
+              .setLabel('✏️ Edytuj')
+              .setStyle(ButtonStyle.Primary),
+            new ButtonBuilder()
+              .setCustomId(`delete_${listingId}`)
+              .setLabel('🗑️ Usuń')
+              .setStyle(ButtonStyle.Danger)
+          );
+
+          interaction.channel.send({ 
+            embeds: [embed], 
+            components: [row, ownerRow] 
+          });
           
           interaction.editReply({
             content: `✅ **Sukces!** Produkt "${nazwa}" został wystawiony na sprzedaż za **${cena}** punktów!\n\n**⚠️ Uwaga:** Link do produktu jest prywatny i będzie widoczny tylko dla kupującego.`,
@@ -488,10 +566,9 @@ client.on('interactionCreate', async (interaction) => {
 
   // --- /dodajpunkty (TYLKO ADMINISTRATORZY) ---
   if (interaction.isChatInputCommand() && interaction.commandName === 'dodajpunkty') {
-    // Sprawdź uprawnienia
     if (!hasAdminPermission(interaction.member)) {
       const embed = new EmbedBuilder()
-        .setColor(0xED4245)
+        .setColor(COLORS.ERROR)
         .setTitle('❌ Brak uprawnień')
         .setDescription('Ta komenda jest dostępna tylko dla administratorów!')
         .setTimestamp();
@@ -507,7 +584,7 @@ client.on('interactionCreate', async (interaction) => {
     addPoints(user.id, ilosc, () => {
       getPoints(user.id, (pts) => {
         const embed = new EmbedBuilder()
-          .setColor(0x57F287)
+          .setColor(COLORS.SUCCESS)
           .setTitle('✅ Punkty dodane')
           .setDescription(`Dodano **${ilosc}** punktów do konta **${user.username}**`)
           .addFields(
@@ -519,7 +596,6 @@ client.on('interactionCreate', async (interaction) => {
 
         interaction.editReply({ embeds: [embed] });
 
-        // Wyślij log
         sendLog('points_added', interaction.user, user, ilosc);
         addLog('points_added', interaction.user.id, user.id, ilosc);
       });
@@ -537,7 +613,7 @@ client.on('interactionCreate', async (interaction) => {
       if (success) {
         getPoints(user.id, (pts) => {
           const embed = new EmbedBuilder()
-            .setColor(0x57F287)
+            .setColor(COLORS.SUCCESS)
             .setTitle('✅ Punkty usunięte')
             .setDescription(`Usunięto **${ilosc}** punktów z konta **${user.username}**`)
             .addFields(
@@ -548,13 +624,12 @@ client.on('interactionCreate', async (interaction) => {
 
           interaction.editReply({ embeds: [embed] });
 
-          // Wyślij log
           sendLog('points_removed', interaction.user, user, ilosc);
           addLog('points_removed', interaction.user.id, user.id, ilosc);
         });
       } else {
         const embed = new EmbedBuilder()
-          .setColor(0xED4245)
+          .setColor(COLORS.ERROR)
           .setTitle('❌ Błąd')
           .setDescription(`**${user.username}** nie ma wystarczającej liczby punktów!`)
           .setTimestamp();
@@ -564,19 +639,20 @@ client.on('interactionCreate', async (interaction) => {
     });
   }
 
-  // --- /saldo (możliwość sprawdzenia cudzego salda) ---
+  // --- /saldo ---
   if (interaction.isChatInputCommand() && interaction.commandName === 'saldo') {
     const targetUser = interaction.options.getUser('uzytkownik') || interaction.user;
     
     getPoints(targetUser.id, (pts) => {
       const embed = new EmbedBuilder()
-        .setColor(0x5865F2)
+        .setColor(COLORS.PRIMARY)
         .setTitle('💰 Saldo punktów')
         .setDescription(targetUser.id === interaction.user.id 
           ? `**${targetUser.username}**, masz **${pts}** punktów`
           : `**${targetUser.username}** ma **${pts}** punktów`
         )
         .setThumbnail(targetUser.displayAvatarURL())
+        .setFooter({ text: 'System punktów premium' })
         .setTimestamp();
 
       interaction.reply({ embeds: [embed], ephemeral: targetUser.id !== interaction.user.id });
@@ -605,7 +681,7 @@ client.on('interactionCreate', async (interaction) => {
         nextDaily.setHours(0, 0, 0, 0);
 
         const embed = new EmbedBuilder()
-          .setColor(0xED4245)
+          .setColor(COLORS.ERROR)
           .setTitle('🎁 Codzienna nagroda')
           .setDescription('Dzisiejszą nagrodę już odebrałeś!')
           .addFields(
@@ -616,12 +692,11 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.editReply({ embeds: [embed] });
       }
 
-      // Przyznaj nagrodę
       addPoints(interaction.user.id, DAILY_POINTS, () => {
         DB.run("UPDATE users SET last_daily = CURRENT_TIMESTAMP WHERE id = ?", [interaction.user.id], () => {
           getPoints(interaction.user.id, (pts) => {
             const embed = new EmbedBuilder()
-              .setColor(0x57F287)
+              .setColor(COLORS.SUCCESS)
               .setTitle('🎁 Codzienna nagroda')
               .setDescription(`Odebrałeś dzisiejszą nagrodę!`)
               .addFields(
@@ -633,7 +708,6 @@ client.on('interactionCreate', async (interaction) => {
 
             interaction.editReply({ embeds: [embed] });
 
-            // Wyślij log
             sendLog('daily_reward', interaction.user, null, DAILY_POINTS);
             addLog('daily_reward', interaction.user.id, null, DAILY_POINTS);
           });
@@ -657,7 +731,7 @@ client.on('interactionCreate', async (interaction) => {
 
         if (rows.length === 0) {
           const embed = new EmbedBuilder()
-            .setColor(0xFEE75C)
+            .setColor(COLORS.WARNING)
             .setTitle('🏆 Ranking punktów')
             .setDescription('Brak użytkowników z punktami.\nBądź pierwszy i zdobądź punkty!')
             .setTimestamp();
@@ -666,7 +740,7 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         const embed = new EmbedBuilder()
-          .setColor(0xFFD700)
+          .setColor(COLORS.PREMIUM)
           .setTitle('🏆 Top 10 - Ranking punktów')
           .setDescription('Najbogatsi użytkownicy serwera:')
           .setTimestamp();
@@ -691,14 +765,13 @@ client.on('interactionCreate', async (interaction) => {
           }
         }
 
-        // Dodaj informację o pozycji użytkownika
         DB.get("SELECT COUNT(*) as position FROM users WHERE points > (SELECT points FROM users WHERE id = ?)", 
           [interaction.user.id], (err, row) => {
             if (!err && row) {
               const position = row.position + 1;
               getPoints(interaction.user.id, (userPts) => {
                 embed.setFooter({ 
-                  text: `Twoja pozycja: ${position} • Twoje punkty: ${userPts}` 
+                  text: `Twoja pozycja: ${position} • Twoje punkty: ${userPts} • System premium` 
                 });
                 interaction.reply({ embeds: [embed] });
               });
@@ -726,7 +799,7 @@ client.on('interactionCreate', async (interaction) => {
 
         if (rows.length === 0) {
           const embed = new EmbedBuilder()
-            .setColor(0xFEE75C)
+            .setColor(COLORS.WARNING)
             .setTitle('🏪 Sklep - brak ofert')
             .setDescription('Aktualnie nie ma żadnych produktów w sklepie.\nBądź pierwszy i wystaw coś używając `/wystaw`!')
             .setTimestamp();
@@ -735,10 +808,10 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         const embed = new EmbedBuilder()
-          .setColor(0x5865F2)
+          .setColor(COLORS.PRIMARY)
           .setTitle('🏪 Dostępne produkty')
           .setDescription(`Znaleziono **${rows.length}** dostępnych produktów:\n\n*🔐 Linki do produktów są prywatne i dostępne tylko po zakupie*`)
-          .setFooter({ text: `Użyj /wystaw aby dodać swój produkt` })
+          .setFooter({ text: `Premium Market System • Użyj /wystaw aby dodać swój produkt` })
           .setTimestamp();
 
         rows.forEach((item, index) => {
@@ -778,7 +851,7 @@ client.on('interactionCreate', async (interaction) => {
         getPoints(interaction.user.id, (senderPts) => {
           getPoints(targetUser.id, (receiverPts) => {
             const embed = new EmbedBuilder()
-              .setColor(0x57F287)
+              .setColor(COLORS.SUCCESS)
               .setTitle('✅ Przelew wykonany')
               .setDescription(`Przelano **${amount}** punktów do **${targetUser.username}**`)
               .addFields(
@@ -790,13 +863,12 @@ client.on('interactionCreate', async (interaction) => {
 
             interaction.editReply({ embeds: [embed] });
 
-            // Wyślij log
             sendLog('transfer', interaction.user, targetUser, amount);
             addLog('transfer', interaction.user.id, targetUser.id, amount);
 
             // Powiadomienie dla odbiorcy
             const receiverEmbed = new EmbedBuilder()
-              .setColor(0x57F287)
+              .setColor(COLORS.SUCCESS)
               .setTitle('💰 Otrzymałeś przelew')
               .setDescription(`**${interaction.user.username}** przelał Ci **${amount}** punktów!`)
               .addFields(
@@ -817,6 +889,57 @@ client.on('interactionCreate', async (interaction) => {
     });
   }
 
+  // --- /usunogloszenie (ADMIN) ---
+  if (interaction.isChatInputCommand() && interaction.commandName === 'usunogloszenie') {
+    if (!hasAdminPermission(interaction.member)) {
+      const embed = new EmbedBuilder()
+        .setColor(COLORS.ERROR)
+        .setTitle('❌ Brak uprawnień')
+        .setDescription('Ta komenda jest dostępna tylko dla administratorów!')
+        .setTimestamp();
+      
+      return interaction.reply({ embeds: [embed], ephemeral: true });
+    }
+
+    await interaction.deferReply({ ephemeral: true });
+    
+    const listingId = interaction.options.getInteger('id');
+
+    DB.get("SELECT * FROM listings WHERE id = ?", [listingId], (err, listing) => {
+      if (err || !listing) {
+        return interaction.editReply({
+          content: '❌ Nie znaleziono ogłoszenia o podanym ID.',
+          ephemeral: true
+        });
+      }
+
+      DB.run("DELETE FROM listings WHERE id = ?", [listingId], (err) => {
+        if (err) {
+          console.error('Błąd usuwania oferty:', err);
+          return interaction.editReply({
+            content: '❌ Wystąpił błąd podczas usuwania ogłoszenia.',
+            ephemeral: true
+          });
+        }
+
+        const embed = new EmbedBuilder()
+          .setColor(COLORS.SUCCESS)
+          .setTitle('🗑️ Ogłoszenie usunięte')
+          .setDescription(`Pomyślnie usunięto ogłoszenie ID: **${listingId}**`)
+          .addFields(
+            { name: '📦 Produkt', value: listing.name, inline: true },
+            { name: '💰 Cena', value: `${listing.price} pkt`, inline: true }
+          )
+          .setTimestamp();
+
+        interaction.editReply({ embeds: [embed] });
+
+        sendLog('listing_deleted', interaction.user, null, 0, { id: listingId }, listing.name);
+        addLog('listing_deleted', interaction.user.id, null, 0, listingId, listing.name);
+      });
+    });
+  }
+
   // --- Kupowanie oferty ---
   if (interaction.isButton() && interaction.customId.startsWith('buy_')) {
     await interaction.deferReply({ ephemeral: true });
@@ -834,40 +957,25 @@ client.on('interactionCreate', async (interaction) => {
         });
       }
 
-      console.log('📦 Znaleziona oferta:', listing);
-
       if (!listing) {
-        console.log('❌ Oferta nie istnieje w bazie');
         return interaction.editReply({
           content: "❌ Ten produkt nie istnieje.",
           ephemeral: true
         });
       }
 
-      if (listing.sold === 1) {
-        console.log('❌ Oferta już sprzedana');
-        return interaction.editReply({
-          content: "❌ Produkt został już sprzedany.",
-          ephemeral: true
-        });
-      }
-
       if (listing.seller === interaction.user.id) {
-        console.log('❌ Próba kupienia własnego produktu');
         return interaction.editReply({
           content: "❌ Nie możesz kupić własnego produktu!",
           ephemeral: true
         });
       }
 
-      console.log(`💰 Sprawdzanie punktów użytkownika: ${interaction.user.username}, cena: ${listing.price}`);
-
       removePoints(interaction.user.id, listing.price, (success) => {
         if (!success) {
           getPoints(interaction.user.id, (pts) => {
-            console.log(`❌ Brak punktów: wymagane ${listing.price}, posiada ${pts}`);
             const embed = new EmbedBuilder()
-              .setColor(0xED4245)
+              .setColor(COLORS.ERROR)
               .setTitle('❌ Brak punktów')
               .setDescription(`Nie masz wystarczającej liczby punktów!`)
               .addFields(
@@ -879,8 +987,6 @@ client.on('interactionCreate', async (interaction) => {
           });
           return;
         }
-
-        console.log(`✅ Punkty pobrane, dodawanie punktów sprzedawcy: ${listing.seller}`);
 
         // Dodaj punkty sprzedawcy
         addPoints(listing.seller, listing.price, () => {
@@ -897,34 +1003,32 @@ client.on('interactionCreate', async (interaction) => {
                 });
               }
 
-              console.log('✅ Oferta oznaczona jako sprzedana');
-
               // Pobierz aktualne salda
               getPoints(interaction.user.id, (buyerPts) => {
                 getPoints(listing.seller, (sellerPts) => {
-                  console.log(`✅ Salda: kupujący ${buyerPts}, sprzedawca ${sellerPts}`);
-                  
-                  // Embed potwierdzający zakup DLA KUPUJĄCEGO (Z LINKIEM)
+                  // Wyślij wiadomość prywatną do kupującego
+                  sendPurchaseDM(interaction.user, listing, { id: listing.seller });
+
+                  // Embed potwierdzający zakup DLA KUPUJĄCEGO
                   const confirmEmbed = new EmbedBuilder()
-                    .setColor(0x57F287)
+                    .setColor(COLORS.SUCCESS)
                     .setTitle("✅ Zakup udany!")
                     .setDescription(`Kupiłeś **${listing.name}**`)
                     .addFields(
                       { name: "👤 Sprzedawca", value: `<@${listing.seller}>`, inline: true },
                       { name: "💰 Cena", value: `**${listing.price}** pkt`, inline: true },
-                      { name: "🔗 Link do produktu", value: listing.link, inline: false },
                       { name: "💰 Twoje saldo", value: `**${buyerPts}** pkt`, inline: true }
                     )
-                    .setFooter({ text: `ID oferty: ${listingId}` })
+                    .setFooter({ text: `Link do produktu został wysłany w wiadomości prywatnej • ID: ${listingId}` })
                     .setTimestamp();
 
                   interaction.editReply({ embeds: [confirmEmbed] });
 
-                  // Aktualizacja oryginalnej wiadomości z ofertą (BEZ LINKU)
+                  // Aktualizacja oryginalnej wiadomości z ofertą
                   try {
                     const originalEmbed = interaction.message.embeds[0];
                     const updatedEmbed = EmbedBuilder.from(originalEmbed)
-                      .setColor(0x95A5A6)
+                      .setColor(0x6B7280)
                       .setTitle(`✅ SPRZEDANE: ${listing.name}`)
                       .setDescription(originalEmbed.description || '')
                       .spliceFields(0, originalEmbed.fields.length)
@@ -948,6 +1052,7 @@ client.on('interactionCreate', async (interaction) => {
                         .setDisabled(true)
                     );
 
+                    // Usuń przyciski edycji i usuwania
                     interaction.message.edit({ 
                       embeds: [updatedEmbed], 
                       components: [disabledRow] 
@@ -961,9 +1066,9 @@ client.on('interactionCreate', async (interaction) => {
                     sendLog('purchase', interaction.user, sellerUser, listing.price, listing);
                     addLog('purchase', interaction.user.id, listing.seller, listing.price, listingId, listing.name);
 
-                    // Powiadomienie dla sprzedawcy (BEZ LINKU)
+                    // Powiadomienie dla sprzedawcy
                     const sellerEmbed = new EmbedBuilder()
-                      .setColor(0x57F287)
+                      .setColor(COLORS.SUCCESS)
                       .setTitle('💰 Sprzedaż zakończona!')
                       .setDescription(`Twój produkt **"${listing.name}"** został sprzedany!`)
                       .addFields(
@@ -977,8 +1082,6 @@ client.on('interactionCreate', async (interaction) => {
                       console.log('Nie udało się wysłać DM do sprzedawcy');
                     });
                   });
-
-                  console.log('✅ Transakcja zakończona pomyślnie');
                 });
               });
             }
@@ -988,7 +1091,7 @@ client.on('interactionCreate', async (interaction) => {
     });
   }
 
-  // --- Przycisk informacji o ofercie (BEZ LINKU) ---
+  // --- Przycisk informacji o ofercie ---
   if (interaction.isButton() && interaction.customId.startsWith('info_')) {
     await interaction.deferReply({ ephemeral: true });
     
@@ -1003,7 +1106,7 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       const embed = new EmbedBuilder()
-        .setColor(0x5865F2)
+        .setColor(COLORS.PRIMARY)
         .setTitle(`ℹ️ Informacje o ofercie: ${listing.name}`)
         .addFields(
           { name: '🆔 ID oferty', value: `**${listing.id}**`, inline: true },
@@ -1017,6 +1120,233 @@ client.on('interactionCreate', async (interaction) => {
         .setTimestamp();
 
       interaction.editReply({ embeds: [embed] });
+    });
+  }
+
+  // --- Przycisk edycji oferty ---
+  if (interaction.isButton() && interaction.customId.startsWith('edit_')) {
+    await interaction.deferReply({ ephemeral: true });
+    
+    const listingId = interaction.customId.split('_')[1];
+    
+    DB.get("SELECT * FROM listings WHERE id = ?", [listingId], (err, listing) => {
+      if (err || !listing) {
+        return interaction.editReply({
+          content: '❌ Nie znaleziono oferty.',
+          ephemeral: true
+        });
+      }
+
+      if (listing.seller !== interaction.user.id && !hasAdminPermission(interaction.member)) {
+        return interaction.editReply({
+          content: '❌ Tylko sprzedawca lub administrator może edytować tę ofertę.',
+          ephemeral: true
+        });
+      }
+
+      if (listing.sold === 1) {
+        return interaction.editReply({
+          content: '❌ Nie można edytować już sprzedanej oferty.',
+          ephemeral: true
+        });
+      }
+
+      const modal = new ModalBuilder()
+        .setCustomId(`editModal_${listingId}`)
+        .setTitle('✏️ Edytuj ofertę');
+
+      const nazwa = new TextInputBuilder()
+        .setCustomId('nazwa')
+        .setLabel('Nazwa produktu')
+        .setValue(listing.name)
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(100);
+
+      const opis = new TextInputBuilder()
+        .setCustomId('opis')
+        .setLabel('Opis produktu')
+        .setValue(listing.description)
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(true)
+        .setMaxLength(1000);
+
+      const cena = new TextInputBuilder()
+        .setCustomId('cena')
+        .setLabel('Cena w punktach')
+        .setValue(listing.price.toString())
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(10);
+
+      const link = new TextInputBuilder()
+        .setCustomId('link')
+        .setLabel('Link do produktu')
+        .setValue(listing.link)
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(500);
+
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(nazwa),
+        new ActionRowBuilder().addComponents(opis),
+        new ActionRowBuilder().addComponents(cena),
+        new ActionRowBuilder().addComponents(link)
+      );
+
+      interaction.showModal(modal);
+    });
+  }
+
+  // --- Obsługa modala edycji ---
+  if (interaction.isModalSubmit() && interaction.customId.startsWith('editModal_')) {
+    await interaction.deferReply({ ephemeral: true });
+    
+    const listingId = interaction.customId.split('_')[1];
+    const cena = parseInt(interaction.fields.getTextInputValue('cena'));
+    const nazwa = interaction.fields.getTextInputValue('nazwa');
+    const opis = interaction.fields.getTextInputValue('opis');
+    const link = interaction.fields.getTextInputValue('link');
+
+    // Walidacja
+    if (isNaN(cena) || cena <= 0) {
+      return interaction.editReply({
+        content: '❌ Cena musi być liczbą większą od 0!',
+        ephemeral: true
+      });
+    }
+
+    if (!link.startsWith('http://') && !link.startsWith('https://')) {
+      return interaction.editReply({
+        content: '❌ Link musi zaczynać się od http:// lub https://',
+        ephemeral: true
+      });
+    }
+
+    DB.run(
+      "UPDATE listings SET name = ?, description = ?, price = ?, link = ? WHERE id = ?",
+      [nazwa, opis, cena, link, listingId],
+      (err) => {
+        if (err) {
+          console.error('Błąd aktualizacji oferty:', err);
+          return interaction.editReply({
+            content: '❌ Nie udało się zaktualizować oferty!',
+            ephemeral: true
+          });
+        }
+
+        const listing = { id: listingId, name: nazwa, price: cena };
+        sendLog('listing_edited', interaction.user, null, cena, listing);
+        addLog('listing_edited', interaction.user.id, null, cena, listingId, nazwa);
+
+        interaction.editReply({
+          content: `✅ Oferta "${nazwa}" została zaktualizowana!`,
+          ephemeral: true
+        });
+
+        // Aktualizuj wiadomość z ofertą
+        DB.get("SELECT * FROM listings WHERE id = ?", [listingId], (err, updatedListing) => {
+          if (!err && updatedListing) {
+            try {
+              const embed = new EmbedBuilder()
+                .setColor(COLORS.PRIMARY)
+                .setAuthor({ 
+                  name: interaction.user.username, 
+                  iconURL: interaction.user.displayAvatarURL() 
+                })
+                .setTitle(`🛒 ${updatedListing.name} ✏️`)
+                .setDescription(updatedListing.description)
+                .addFields(
+                  { name: "💰 Cena", value: `**${updatedListing.price}** pkt`, inline: true },
+                  { name: "👤 Sprzedawca", value: `<@${updatedListing.seller}>`, inline: true },
+                  { name: "🔐 Dostęp do produktu", value: "Link będzie dostępny po zakupie", inline: false }
+                )
+                .setFooter({ text: `ID oferty: ${listingId} • Edytowano • ${new Date().toLocaleDateString('pl-PL')}` })
+                .setTimestamp();
+
+              const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                  .setCustomId(`buy_${listingId}`)
+                  .setLabel(`🛒 Kup za ${updatedListing.price} pkt`)
+                  .setStyle(ButtonStyle.Success),
+                new ButtonBuilder()
+                  .setCustomId(`info_${listingId}`)
+                  .setLabel('ℹ️ Informacje')
+                  .setStyle(ButtonStyle.Secondary)
+              );
+
+              const ownerRow = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                  .setCustomId(`edit_${listingId}`)
+                  .setLabel('✏️ Edytuj')
+                  .setStyle(ButtonStyle.Primary),
+                new ButtonBuilder()
+                  .setCustomId(`delete_${listingId}`)
+                  .setLabel('🗑️ Usuń')
+                  .setStyle(ButtonStyle.Danger)
+              );
+
+              // Znajdź oryginalną wiadomość i zaktualizuj ją
+              const channel = interaction.channel;
+              // Tutaj potrzebujemy messageReference do oryginalnej wiadomości
+              // W praktyce może być potrzebne przechowywanie ID wiadomości w bazie danych
+            } catch (error) {
+              console.error('Błąd przy aktualizacji wiadomości:', error);
+            }
+          }
+        });
+      }
+    );
+  }
+
+  // --- Przycisk usuwania oferty ---
+  if (interaction.isButton() && interaction.customId.startsWith('delete_')) {
+    await interaction.deferReply({ ephemeral: true });
+    
+    const listingId = interaction.customId.split('_')[1];
+    
+    DB.get("SELECT * FROM listings WHERE id = ?", [listingId], (err, listing) => {
+      if (err || !listing) {
+        return interaction.editReply({
+          content: '❌ Nie znaleziono oferty.',
+          ephemeral: true
+        });
+      }
+
+      if (listing.seller !== interaction.user.id && !hasAdminPermission(interaction.member)) {
+        return interaction.editReply({
+          content: '❌ Tylko sprzedawca lub administrator może usunąć tę ofertę.',
+          ephemeral: true
+        });
+      }
+
+      DB.run("DELETE FROM listings WHERE id = ?", [listingId], (err) => {
+        if (err) {
+          console.error('Błąd usuwania oferty:', err);
+          return interaction.editReply({
+            content: '❌ Wystąpił błąd podczas usuwania oferty.',
+            ephemeral: true
+          });
+        }
+
+        // Usuń wiadomość z ofertą
+        try {
+          interaction.message.delete();
+        } catch (error) {
+          console.error('Błąd przy usuwaniu wiadomości:', error);
+        }
+
+        const embed = new EmbedBuilder()
+          .setColor(COLORS.SUCCESS)
+          .setTitle('🗑️ Oferta usunięta')
+          .setDescription(`Pomyślnie usunięto ofertę **"${listing.name}"**`)
+          .setTimestamp();
+
+        interaction.editReply({ embeds: [embed] });
+
+        sendLog('listing_deleted', interaction.user, null, 0, { id: listingId }, listing.name);
+        addLog('listing_deleted', interaction.user.id, null, 0, listingId, listing.name);
+      });
     });
   }
 });
@@ -1038,8 +1368,6 @@ process.on('uncaughtException', (error) => {
 });
 
 // === START BOTA ===
-
-// Token z environment variable (np. w Pellii dodajesz w zakładce Variables)
 const TOKEN = process.env.TOKEN;
 
 if (!TOKEN) {
@@ -1052,4 +1380,4 @@ client.login(TOKEN)
   .catch(err => {
     console.error('❌ Błąd logowania:', err);
     process.exit(1);
-  });
+});
