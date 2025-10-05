@@ -1038,8 +1038,19 @@ process.on('uncaughtException', (error) => {
 });
 
 // === START BOTA ===
-client.login(process.env.DISCORD_TOKEN).then(() => {
-  console.log('🚀 Bot uruchamia się...');
-}).catch(error => {
-  console.error('❌ Błąd logowania:', error);
-});
+
+// Token z environment variable (np. w Pellii dodajesz w zakładce Variables)
+const TOKEN = process.env.TOKEN;
+
+if (!TOKEN) {
+  console.error('❌ Brak tokena! Ustaw zmienną środowiskową TOKEN w ustawieniach hostingu.');
+  process.exit(1);
+}
+
+client.login(TOKEN)
+  .then(() => console.log('🚀 Bot uruchomiony poprawnie!'))
+  .catch(err => {
+    console.error('❌ Błąd logowania:', err);
+    process.exit(1);
+  });
+
